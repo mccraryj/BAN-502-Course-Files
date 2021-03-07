@@ -1,0 +1,430 @@
+---
+output:
+  word_document: default
+  html_document: default
+---
+## Schaeffer, Sarah
+## McCrary, Jessenia
+### BAN 502 Project-Phase 2
+
+
+---
+output:
+  word_document: default
+  html_document: default
+---
+```{r, message = FALSE}
+library(tidyverse)
+library(tidymodels)
+library(glmnet) #for Lasso, ridge, and elastic net models 
+library(e1071) #often needed for various statistical tasks
+library(ROCR) #for threshold selection
+library(rpart) #for classification trees
+library(rpart.plot) #for plotting trees
+library(rattle) #better visualization of classification trees
+library(RColorBrewer) 
+library(caret)
+```
+```{r}
+ames_student = read_csv("ames_student.csv")
+```
+
+```{r}
+#str(ames_student)
+#summary(ames_student)
+```
+
+```{r}
+ames_student = ames_student %>% select(-X1)
+```
+
+```{r}
+ames_student = ames_student %>% mutate_if(is.character,as_factor)
+```
+
+Reduce dataset to only include those variables identified as being high importance after running the random forrest
+***Added Fireplaces***
+```{r}
+ames_project = ames_student %>%
+  select(Above_Median, Gr_Liv_Area, Garage_Cars, Garage_Area, Full_Bath, First_Flr_SF, Total_Bsmt_SF, Foundation, Second_Flr_SF, Fireplaces)
+```
+
+Establish Training and Test Datasets
+```{r}
+set.seed(12345)
+ames_project_split = initial_split(ames_project, prop = 0.70, strata = Above_Median)
+train = training(ames_project_split)
+test = testing(ames_project_split)
+
+summary(train)
+```
+
+
+### Logistic Regression
+```{r}
+ames_model = 
+  logistic_reg() %>% #note the use of logistic_reg
+  set_engine("glm") #standard logistic regression engine is glm
+
+ames_recipe = recipe(Above_Median ~ ., train) %>%
+  step_dummy(all_nominal(), -all_outcomes()) #exclude the response variable from being dummy converted  
+
+logreg_wf = workflow() %>%
+  add_recipe(ames_recipe) %>% 
+  add_model(ames_model)
+
+ames_fit_LR1 = fit(logreg_wf, train)
+```
+
+```{r}
+summary(ames_fit_LR1$fit$fit$fit)
+```
+
+Model with only the significant variables. AIC goes down by very little, but all variables are significant.
+```{r}
+ames_model = 
+  logistic_reg() %>% #note the use of logistic_reg
+  set_engine("glm") #standard logistic regression engine is glm
+
+ames_recipe = recipe(Above_Median ~ Garage_Cars + Full_Bath + First_Flr_SF + Second_Flr_SF + Total_Bsmt_SF + Foundation + Fireplaces, train) %>%
+  step_dummy(all_nominal(), -all_outcomes()) #exclude the response variable from being dummy converted  
+
+logreg_wf = workflow() %>%
+  add_recipe(ames_recipe) %>% 
+  add_model(ames_model)
+
+ames_fit_LR2 = fit(logreg_wf, train)
+```
+
+```{r}
+summary(ames_fit_LR2$fit$fit$fit)
+```
+Model with only Gr_Liv_Area - AIC increases, not the right move
+```{r}
+ames_model = 
+  logistic_reg() %>% #note the use of logistic_reg
+  set_engine("glm") #standard logistic regression engine is glm
+
+ames_recipe = recipe(Above_Median ~ Gr_Liv_Area, train) %>%
+  step_dummy(all_nominal(), -all_outcomes()) #exclude the response variable from being dummy converted  
+
+logreg_wf = workflow() %>%
+  add_recipe(ames_recipe) %>% 
+  add_model(ames_model)
+
+ames_fit_LR3 = fit(logreg_wf, train)
+```
+
+```{r}
+summary(ames_fit_LR3$fit$fit$fit)
+```
+
+Model with only the significant variables has the lowest AIC. This has been coded as ames_fit_LR2 goes down by very little, but all variables are significant.
+
+Develop Predictions
+```{r}
+predictions_LR2 = predict(ames_fit_LR2, train, type="prob") #develop predicted probabilities
+head(predictions_LR2)
+```
+Extract the "yes" prediction
+```{r}
+predictions_LR2 = predict(ames_fit_LR2, train, type="prob")[1]
+head(predictions_LR2)
+```
+
+Threshold Selection
+```{r}
+ROCRpred = prediction(predictions_LR2, train$Above_Median) 
+
+ROCRperf = performance(ROCRpred, "tpr", "fpr")
+plot(ROCRperf, colorize=TRUE, print.cutoffs.at=seq(0,1,by=0.1), text.adj=c(-0.2,1.7))
+```
+
+```{r}
+as.numeric(performance(ROCRpred, "auc")@y.values)
+```
+```{r}
+opt.cut = function(perf, pred){
+    cut.ind = mapply(FUN=function(x, y, p){
+        d = (x - 0)^2 + (y-1)^2
+        ind = which(d == min(d))
+        c(sensitivity = y[[ind]], specificity = 1-x[[ind]], 
+            cutoff = p[[ind]])
+    }, perf@x.values, perf@y.values, pred@cutoffs)
+}
+print(opt.cut(ROCRperf, ROCRpred))
+```
+
+Test thresholds to evaluate accuracy 
+```{r}
+t_LR2 = table(train$Above_Median,predictions_LR2 > 0.5847966)
+t_LR2
+```
+
+Calculate Accuracy
+```{r}
+(t_LR2[1,2]+t_LR2[2,1])/nrow(train)
+```
+Testing threshold at 0.48
+```{r}
+t_LR2 = table(train$Above_Median,predictions_LR2 > 0.48)
+t_LR2
+(t_LR2[1,2]+t_LR2[2,1])/nrow(train)
+```
+
+Testing threshold at 0.68
+```{r}
+t_LR2 = table(train$Above_Median,predictions_LR2 > 0.68)
+t_LR2
+(t_LR2[1,2]+t_LR2[2,1])/nrow(train)
+```
+
+Logistics Regression with Threshold of 0.5847966  has the highest accuracy on the training dataset of 89.29% accurate. 
+
+Logistic Regression Accuracy on Test Dataset
+
+```{r}
+predictions_LR2_test = predict(ames_fit_LR2, test, type="prob") #develop predicted probabilities
+head(predictions_LR2_test)
+```
+Extract the "yes" prediction
+```{r}
+predictions_LR2_test = predict(ames_fit_LR2, test, type="prob")[1]
+head(predictions_LR2_test)
+```
+
+```{r}
+t_LR2_test = table(test$Above_Median,predictions_LR2_test > 0.5847966)
+t_LR2_test
+(t_LR2_test[1,2]+t_LR2_test[2,1])/nrow(test)
+```
+
+
+### Lasso
+```{r}
+lasso_model = #give the model type a name 
+  logistic_reg(mixture = 1) %>% #mixture = 1 sets up Lasso
+  set_engine("glmnet") 
+
+ames_recipe = recipe(Above_Median ~ ., train) %>% 
+  step_dummy(all_nominal(), -all_outcomes()) %>% #makes sure factors are treated as categorical
+  step_center(all_predictors()) %>% #centers the predictors
+  step_scale(all_predictors()) #scales the predictors
+
+lasso_wflow =
+  workflow() %>% 
+  add_model(lasso_model) %>% 
+  add_recipe(ames_recipe)
+
+lasso_fit = fit(lasso_wflow, train)
+```
+
+```{r}
+lasso_fit %>%
+  pull_workflow_fit() %>%
+  pluck("fit") 
+```
+
+None of the variables got thrown out
+```{r}
+lasso_fit %>%
+  pull_workflow_fit() %>%
+  pluck("fit")  %>% 
+  coef(s = 0.000130) #show the coefficients for our selected lambda value
+```
+
+
+Develop Lasso Predictions - all variables which is Logistics Regression Model 1
+
+```{r}
+predictions_lasso = predict(ames_fit_LR1, train, type="prob") #develop predicted probabilities
+head(predictions_lasso)
+```
+Extract the "yes" prediction
+```{r}
+predictions_lasso = predict(ames_fit_LR1, train, type="prob")[1]
+head(predictions_lasso)
+```
+
+Threshold Selection
+```{r}
+ROCRpred = prediction(predictions_lasso, train$Above_Median) 
+
+ROCRperf = performance(ROCRpred, "tpr", "fpr")
+plot(ROCRperf, colorize=TRUE, print.cutoffs.at=seq(0,1,by=0.1), text.adj=c(-0.2,1.7))
+```
+
+```{r}
+as.numeric(performance(ROCRpred, "auc")@y.values)
+```
+```{r}
+opt.cut = function(perf, pred){
+    cut.ind = mapply(FUN=function(x, y, p){
+        d = (x - 0)^2 + (y-1)^2
+        ind = which(d == min(d))
+        c(sensitivity = y[[ind]], specificity = 1-x[[ind]], 
+            cutoff = p[[ind]])
+    }, perf@x.values, perf@y.values, pred@cutoffs)
+}
+print(opt.cut(ROCRperf, ROCRpred))
+```
+
+Test thresholds to evaluate accuracy 
+```{r}
+t_lasso = table(train$Above_Median,predictions_lasso > 0.5927203)
+t_lasso
+```
+
+Calculate Accuracy
+```{r}
+(t_lasso[1,2]+t_lasso[2,1])/nrow(train)
+```
+Testing threshold at 0.49
+```{r}
+t_lasso = table(train$Above_Median,predictions_lasso > 0.49)
+t_lasso
+(t_lasso[1,2]+t_lasso[2,1])/nrow(train)
+```
+
+Testing threshold at 0.69
+```{r}
+t_lasso = table(train$Above_Median,predictions_lasso > 0.69)
+t_lasso
+(t_lasso[1,2]+t_lasso[2,1])/nrow(train)
+```
+
+Logistics Regression with Threshold of 0.5927203 has the highest accuracy on the training dataset of 89.36% accurate. 
+
+Lasso Test Dataset Accuracy
+```{r}
+predictions_lasso_test = predict(ames_fit_LR1, test, type="prob")[1]
+head(predictions_lasso_test)
+
+t_lasso_test = table(test$Above_Median,predictions_lasso_test > 0.5927203 )
+t_lasso_test
+(t_lasso_test[1,2]+t_lasso_test[2,1])/nrow(test)
+```
+
+
+
+### Classification Tree
+
+```{r}
+ames_project_recipe = recipe(Above_Median ~., train) %>%
+  step_dummy(all_nominal(),-all_outcomes())
+
+tree_model = decision_tree() %>% 
+  set_engine("rpart", model = TRUE) %>% 
+  set_mode("classification")
+
+ames_project_wflow = 
+  workflow() %>% 
+  add_model(tree_model) %>% 
+  add_recipe(ames_project_recipe)
+
+ames_project_fit = fit(ames_project_wflow, train)
+```
+
+```{r Plot the tree}
+tree = ames_project_fit %>% 
+  pull_workflow_fit() %>% 
+  pluck("fit")
+
+fancyRpartPlot(tree, tweak=1.25)
+```
+
+```{r Examine complexity parameter}
+ames_project_fit$fit$fit$fit$cptable
+```
+
+
+
+```{r Create Folds}
+set.seed(1234)
+folds = vfold_cv(train, v = 5)
+```
+
+```{r Tuning Grid }
+ames_project_recipe = recipe(Above_Median ~., train) %>%
+  step_dummy(all_nominal(),-all_outcomes())
+
+ames_project_tree_model = decision_tree(cost_complexity = tune()) %>% 
+  set_engine("rpart", model = TRUE) %>% 
+  set_mode("classification")
+
+ames_project_tree_grid = grid_regular(cost_complexity(),
+                          levels = 25) 
+
+ames_project_wflow = 
+  workflow() %>% 
+  add_model(ames_project_tree_model) %>% 
+  add_recipe(ames_project_recipe)
+
+ames_project_tree_res = 
+  ames_project_wflow %>% 
+  tune_grid(
+    resamples = folds,
+    grid = ames_project_tree_grid
+    )
+
+ames_project_tree_res
+```
+
+```{r}
+ames_project_tree_res %>%
+  collect_metrics() %>%
+  ggplot(aes(cost_complexity, mean)) +
+  geom_line(size = 1.5, alpha = 0.6) +
+  geom_point(size = 2) +
+  facet_wrap(~ .metric, scales = "free", nrow = 2) 
+```
+
+```{r}
+ames_project_best_tree = ames_project_tree_res %>%
+  select_best("accuracy")
+
+ames_project_best_tree
+```
+
+```{r}
+ames_project_final_wf = 
+  ames_project_wflow %>% 
+  finalize_workflow(ames_project_best_tree)
+```
+
+```{r}
+ames_project_final_fit = fit(ames_project_final_wf, train)
+
+ames_project_tree = ames_project_final_fit %>% 
+  pull_workflow_fit() %>% 
+  pluck("fit")
+
+fancyRpartPlot(ames_project_tree, tweak = 1.5) 
+
+```
+```{r}
+ames_project_final_fit$fit$fit$fit$cptable
+```
+
+
+```{r}
+ames_project_treepred = predict(ames_project_final_fit, train, type = "class")
+head(ames_project_treepred)
+```
+
+```{r}
+confusionMatrix(ames_project_treepred$.pred_class,train$Above_Median, positive="Yes") 
+```
+
+Accuracy of Test Dataset for Classification Tree
+
+```{r}
+ames_project_treepred = predict(ames_project_final_fit, test, type = "class")
+head(ames_project_treepred)
+```
+
+```{r}
+confusionMatrix(ames_project_treepred$.pred_class,test$Above_Median, positive="Yes") 
+```
+
+
